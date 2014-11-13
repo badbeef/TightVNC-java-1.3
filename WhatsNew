@@ -4,6 +4,20 @@
 |   in TightVNC source and binary archives.                          |
 +--------------------------------------------------------------------+
 
+* TightVNC 1.3.10.paf
+
+  - Windows-7: Make Alt-Gr key symbols work on German keyboards
+
+  - Add support for using the Mouse Wheel
+
+  - Optional full-screen mode
+
+  - Enable Copy-Paste via the system clipboard, without the need to
+    maintain a special window for it
+
+  - Optional keepalive mode for connections that are otherwise shut
+    down after an inactivity timeout
+
 * TightVNC 1.3.10
 
   - Windows Server: Impersonating currently logged on user while

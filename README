@@ -291,6 +291,14 @@ Here is the complete list of parameters supported in TightVNC Java viewer:
     desktop size, the window will resize automatically when remote desktop
     size changes.
 
+--> "Full Screen" (no GUI equivalent)
+
+    Values: "Yes", "No"
+    Default: "No"
+
+    Try to operate in fullscreen mode. Fullscreen and subwindow mode
+    can be toggled by pressing Ctrl-Shift-F12.
+
 --> "Scaling factor" (no GUI equivalent)
 
     Value: an integer in the range of [1..1000], or the string "auto".
@@ -366,6 +374,18 @@ Here is the complete list of parameters supported in TightVNC Java viewer:
     usage. Increasing the parameter value does not affect responsiveness on
     mouse and keyboard events, but causes delays in updating the screen when
     there is no mouse and keyboard activity on the client side.
+
+--> "Keepalive" (no GUI equivalent)
+
+    Value: time in seconds.
+    Default: "0".
+
+    If the connection to the VNC server is passing network areas, that block
+    the connection after a certain time of inactivity (e.g. VPNs or DMZs that
+    are configured that way for whatever reason or DMZs), a value unequal 0
+    can be set here to prevent the connection from becoming unusable. A value
+    of 0 means: No keepalive. What actually happens is that a dummy framebuffer
+    update request is sent (the protocol currently has no kind of no-operation)
 
 --> "SocketFactory" (no GUI equivalent)
 

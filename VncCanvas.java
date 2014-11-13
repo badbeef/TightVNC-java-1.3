@@ -27,14 +27,14 @@ import java.awt.image.*;
 import java.io.*;
 import java.lang.*;
 import java.util.zip.*;
-
+import java.awt.datatransfer.*;
 
 //
 // VncCanvas is a subclass of Canvas which draws a VNC desktop on it.
 //
 
 class VncCanvas extends Canvas
-  implements KeyListener, MouseListener, MouseMotionListener {
+  implements KeyListener, MouseListener, MouseMotionListener, MouseWheelListener {
 
   VncViewer viewer;
   RfbProto rfb;
@@ -213,6 +213,7 @@ class VncCanvas extends Canvas
       inputEnabled = true;
       addMouseListener(this);
       addMouseMotionListener(this);
+      addMouseWheelListener(this);
       if (viewer.showControls) {
 	viewer.buttonPanel.enableRemoteAccessControls(true);
       }
@@ -521,6 +522,12 @@ class VncCanvas extends Canvas
 
       case RfbProto.ServerCutText:
 	String s = rfb.readServerCutText();
+	StringSelection ss = new StringSelection(s); 
+
+	try {
+	  Toolkit.getDefaultToolkit().getSystemClipboard().setContents(ss, null);
+        } catch (Exception e) {
+	}
 	viewer.clipboard.setCutText(s);
 	break;
 
@@ -1537,8 +1544,13 @@ class VncCanvas extends Canvas
   public void mouseDragged(MouseEvent evt) {
     processLocalMouseEvent(evt, true);
   }
+  public void mouseWheelMoved(MouseWheelEvent evt) {
+    processLocalMouseEvent((MouseEvent) evt, true);
+  }
 
   public void processLocalKeyEvent(KeyEvent evt) {
+    boolean ignoreKeypress = false;
+
     if (viewer.rfb != null && rfb.inNormalProtocol) {
       if (!inputEnabled) {
 	if ((evt.getKeyChar() == 'r' || evt.getKeyChar() == 'R') &&
@@ -1553,13 +1565,29 @@ class VncCanvas extends Canvas
 	}
       } else {
 	// Input enabled.
-	synchronized(rfb) {
+	if (viewer.fullScreenSupported && evt.isActionKey()) {
+	  int currentModifiers = evt.getModifiers();
+	  
+	  if (evt.getKeyCode() == KeyEvent.VK_F12
+		&& evt.getID() == KeyEvent.KEY_PRESSED
+		&& (currentModifiers & InputEvent.CTRL_MASK) != 0
+		&& (currentModifiers & InputEvent.SHIFT_MASK) != 0) {
+	    try {
+	      viewer.toggleFullScreen();
+	      ignoreKeypress = true;
+	    } catch (Exception e) {
+	    }
+	  }
+	}
+	if (! ignoreKeypress) {
+	 synchronized(rfb) {
 	  try {
 	    rfb.writeKeyEvent(evt);
 	  } catch (Exception e) {
 	    e.printStackTrace();
 	  }
 	  rfb.notify();
+	 }
 	}
       }
     }
@@ -1580,7 +1608,10 @@ class VncCanvas extends Canvas
       }
       synchronized(rfb) {
 	try {
-	  rfb.writePointerEvent(evt);
+	  if (evt.getID() != MouseEvent.MOUSE_WHEEL)
+	    rfb.writePointerEvent(evt);
+	  else
+	    rfb.writeWheelEvent((MouseWheelEvent) evt);
 	} catch (Exception e) {
 	  e.printStackTrace();
 	}

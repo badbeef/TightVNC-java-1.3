@@ -29,8 +29,10 @@ import java.awt.*;
 import java.awt.event.*;
 import java.net.Socket;
 import java.util.zip.*;
+import java.util.Timer;
+import java.util.TimerTask;
 
-class RfbProto {
+class RfbProto extends TimerTask {
 
   final static String
     versionMsg_3_3 = "RFB 003.003\n",
@@ -216,6 +218,11 @@ class RfbProto {
   // If true, informs that the RFB socket was closed.
   private boolean closed;
 
+  // Timer for keepalive packages over the VNC protocol connection
+  Timer keepaliveTimer = null;
+  long keepaliveIntervalMs;
+  long activityTimestamp;
+
   //
   // Constructor. Make TCP connection to RFB server.
   //
@@ -249,6 +256,51 @@ class RfbProto {
     timedKbits = 0;
   }
 
+  //
+  // Set the timer for the keepalive packages over the vnc protocol connection
+  //
+  public void setKeepalive(int seconds)
+  {
+    if (keepaliveTimer == null && seconds > 0) {
+	keepaliveTimer = new Timer();
+    }
+
+    keepaliveIntervalMs = seconds * 1000;
+
+    if (seconds <= 0)
+	return;
+
+    keepaliveTimer.schedule(this, keepaliveIntervalMs, keepaliveIntervalMs);
+
+    activityTimestamp = System.currentTimeMillis();
+  }
+
+  //
+  // is called when the keepalive timer fires
+  //
+  public void run() {
+    // Do nothing as long as the connection is considered active
+    if(System.currentTimeMillis() - activityTimestamp < 5000)
+	return;
+
+    // What i actually wanted to do here is to reschedule the timer
+    // to fire the next time after the rest of the interval. But with
+    // the Timer implementation this does not work. Rescheduling the
+    // timer is not possible. Canceling the timer makes the object
+    // completely unusable. Even creating a new timer does not help.
+    // A possible explanation for this would be, that the actual
+    // timer thread object is reused and it's parameters can never
+    // be changed. Did not verify this.
+    // The only thing that works is to create the timer one time and
+    // let it schedule repeatedly. Afterwards nothing can be chaned.
+
+    try {
+      // send a dummy protocol request
+      writeFramebufferUpdateRequest(0, 0, 0, 0, true);
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
 
   synchronized void close() {
     try {
@@ -972,6 +1024,9 @@ class RfbProto {
 
     System.arraycopy(text.getBytes(), 0, b, 8, text.length());
 
+    // First update timestamp to prevent initiating keepalives during send
+    activityTimestamp = System.currentTimeMillis();
+
     os.write(b);
   }
 
@@ -980,11 +1035,11 @@ class RfbProto {
   // A buffer for putting pointer and keyboard events before being sent.  This
   // is to ensure that multiple RFB events generated from a single Java Event 
   // will all be sent in a single network packet.  The maximum possible
-  // length is 4 modifier down events, a single key event followed by 4
-  // modifier up events i.e. 9 key events or 72 bytes.
+  // length is 4 modifier down events, two mouse wheel events followed by 4
+  // modifier up events i.e. 76 bytes.
   //
 
-  byte[] eventBuf = new byte[72];
+  byte[] eventBuf = new byte[128];
   int eventBufLen;
 
 
@@ -1063,6 +1118,49 @@ class RfbProto {
     os.write(eventBuf, 0, eventBufLen);
   }
 
+  void writeWheelEvent(MouseWheelEvent evt) throws IOException {
+    int numEvents = 1;
+    int modifiers = evt.getModifiers();
+    int x = evt.getX();
+    int y = evt.getY();
+
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    pointerMask = 8;
+    numEvents = evt.getWheelRotation();
+    if (numEvents > 0)
+	pointerMask = 16;
+    else
+	numEvents = - numEvents;
+
+    eventBufLen = 0;
+
+    writeModifierKeyEvents(modifiers);
+
+    eventBuf[eventBufLen++] = (byte) PointerEvent;
+    eventBuf[eventBufLen++] = (byte) pointerMask;
+    eventBuf[eventBufLen++] = (byte) ((x >> 8) & 0xff);
+    eventBuf[eventBufLen++] = (byte) (x & 0xff);
+    eventBuf[eventBufLen++] = (byte) ((y >> 8) & 0xff);
+    eventBuf[eventBufLen++] = (byte) (y & 0xff);
+
+    eventBuf[eventBufLen++] = (byte) PointerEvent;
+    eventBuf[eventBufLen++] = (byte) 0;
+    eventBuf[eventBufLen++] = (byte) ((x >> 8) & 0xff);
+    eventBuf[eventBufLen++] = (byte) (x & 0xff);
+    eventBuf[eventBufLen++] = (byte) ((y >> 8) & 0xff);
+    eventBuf[eventBufLen++] = (byte) (y & 0xff);
+
+    writeModifierKeyEvents(0);
+
+    // First update timestamp to prevent initiating keepalives during send
+    activityTimestamp = System.currentTimeMillis();
+
+    for(int i = 0; i < numEvents; i++)
+      os.write(eventBuf, 0, eventBufLen);
+  }
+
 
   //
   // Write a key event message.  We may need to send modifier key events
@@ -1071,6 +1169,8 @@ class RfbProto {
   //
 
   void writeKeyEvent(KeyEvent evt) throws IOException {
+
+    int currentModifiers;
 
     int keyChar = evt.getKeyChar();
 
@@ -1191,12 +1291,36 @@ class RfbProto {
     }
 
     eventBufLen = 0;
-    writeModifierKeyEvents(evt.getModifiers());
+
+    currentModifiers = evt.getModifiers();
+    // Windows 7 or some Java version send key events that require the
+    // following special treatment with the German Alt-Gr Key. They send
+    // ALT + CTRL before the normal key event. They should be suppressed
+    if (   (currentModifiers & CTRL_MASK) != 0
+	&& (currentModifiers & ALT_MASK) != 0
+	&& (	   (key == 0x5c) || (key == 0x7c)	// backslash / bar
+		|| (key == 0x7b) || (key == 0x7d)	// { }
+		|| (key == 0x5b) || (key == 0x5d)	// [ ]
+		|| (key == 0x7e) || (key == 0x40)	// ~ @
+		|| (key == 0x20ac) || (key == 0xb5))	// Euro Micro
+	) {
+      currentModifiers = 0;
+
+    // With Ctrl+Shift the backend expects uppercase chars in the key event
+    } else if ( (currentModifiers & CTRL_MASK) != 0
+		&& (currentModifiers & SHIFT_MASK) != 0 ) {
+      key = Character.toUpperCase(key);
+    }
+
+    writeModifierKeyEvents(currentModifiers);
     writeKeyEvent(key, down);
 
     // Always release all modifiers after an "up" event
     if (!down)
       writeModifierKeyEvents(0);
+
+    // First update timestamp to prevent initiating keepalives during send
+    activityTimestamp = System.currentTimeMillis();
 
     os.write(eventBuf, 0, eventBufLen);
   }

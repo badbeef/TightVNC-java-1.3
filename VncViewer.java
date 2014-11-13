@@ -27,6 +27,7 @@
 
 import java.awt.*;
 import java.awt.event.*;
+import java.awt.datatransfer.*;
 import java.io.*;
 import java.net.*;
 
@@ -66,6 +67,9 @@ public class VncViewer extends java.applet.Applet
   OptionsFrame options;
   ClipboardFrame clipboard;
   RecordingFrame rec;
+  GraphicsDevice gd;
+  boolean fullScreenSupported;
+  boolean inFullScreenToggle;
 
   // Control session recording.
   Object recordingSync;
@@ -83,6 +87,8 @@ public class VncViewer extends java.applet.Applet
   boolean showControls;
   boolean offerRelogin;
   boolean showOfflineDesktop;
+  boolean fullScreenMode;
+  int keepaliveInterval;
   int deferScreenUpdates;
   int deferCursorUpdates;
   int deferUpdateRequests;
@@ -108,8 +114,25 @@ public class VncViewer extends java.applet.Applet
 	vncFrame.add("Center", this);
       }
       vncContainer = vncFrame;
+
     } else {
       vncContainer = this;
+    }
+
+    gd = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
+    fullScreenSupported = gd.isFullScreenSupported();
+    if (fullScreenMode == true && fullScreenSupported != true) {
+      fullScreenMode = false;
+      System.out.println("Warning: Full screen mode requested, but not available");
+    }
+    inFullScreenToggle = false;
+
+    if (fullScreenMode) {
+      try {
+	vncFrame.setUndecorated(fullScreenMode);
+      } catch (Exception e) {
+	System.out.println("Warning: Full screen mode will be windowed");
+      }
     }
 
     recordingSync = new Object();
@@ -175,6 +198,8 @@ public class VncViewer extends java.applet.Applet
       gbc.weighty = 1.0;
 
       if (inSeparateFrame) {
+	DisplayMode newDisplayMode;
+	DisplayMode oldDisplayMode;
 
 	// Create a panel which itself is resizeable and can hold
 	// non-resizeable VncCanvas component at the top left corner.
@@ -189,11 +214,38 @@ public class VncViewer extends java.applet.Applet
 	gridbag.setConstraints(desktopScrollPane, gbc);
 	desktopScrollPane.add(canvasPanel);
 
+	// Wheel events should go to the desktop
+	desktopScrollPane.setWheelScrollingEnabled(false);
+
 	// Finally, add our ScrollPane to the Frame window.
 	vncFrame.add(desktopScrollPane);
-	vncFrame.setTitle(rfb.desktopName);
-	vncFrame.pack();
-	vc.resizeDesktopFrame();
+
+	if (fullScreenMode) {
+	  oldDisplayMode = gd.getDisplayMode();
+
+	  try {
+
+	    vncFrame.setResizable(! fullScreenMode);
+	    gd.setFullScreenWindow(vncFrame);
+	    validate();
+
+	    // gd.setDisplayMode(newDisplayMode); // suggested by tutorial (?!)
+	  } catch(Exception e) {
+	    System.out.println("Warning: Establishing fullscreen mode failed");
+
+	    gd.setDisplayMode(oldDisplayMode);
+	    gd.setFullScreenWindow(null);
+	  }
+
+	}
+
+	if (! fullScreenMode) {
+
+	  vncFrame.setTitle(rfb.desktopName);
+	  vncFrame.pack();
+	  vc.resizeDesktopFrame();
+	}
+
 
       } else {
 
@@ -208,6 +260,10 @@ public class VncViewer extends java.applet.Applet
 	buttonPanel.enableButtons();
 
       moveFocusToDesktop();
+
+      if (keepaliveInterval > 0) 
+	rfb.setKeepalive(keepaliveInterval);
+
       processNormalProtocol();
 
     } catch (NoRouteToHostException e) {
@@ -735,6 +791,17 @@ public class VncViewer extends java.applet.Applet
 
     // SocketFactory.
     socketFactory = readParameter("SocketFactory", false);
+
+    // FullScreen
+    str = readParameter("Full Screen", false);
+    if (str != null && str.equalsIgnoreCase("Yes"))
+      fullScreenMode = true;
+    str = readParameter("FullScreen", false);
+    if (str != null && str.equalsIgnoreCase("Yes"))
+      fullScreenMode = true;
+
+    // Keepalive for the VNC connection
+    keepaliveInterval = readIntParameter("Keepalive", 0);
   }
 
   //
@@ -941,6 +1008,76 @@ public class VncViewer extends java.applet.Applet
     }
   }
 
+  public void toggleFullScreen() {
+    DisplayMode oldDisplayMode;
+
+    if (! fullScreenSupported)
+      return;
+
+    oldDisplayMode = gd.getDisplayMode();
+
+    inFullScreenToggle = true;
+
+    if (! fullScreenMode) {
+	try {
+	  vncFrame.setVisible(false);
+	  vncFrame.dispose();
+
+	  vncFrame.setUndecorated(true);
+	  vncFrame.setResizable(false);
+	  vncFrame.pack();
+
+	  gd.setFullScreenWindow(vncFrame);
+
+	  vncFrame.setVisible(true);
+
+	  validate();
+
+	  fullScreenMode = true;
+
+	  // gd.setDisplayMode(newDisplayMode); // suggested by tutorial (?!)
+	} catch(Exception e) {
+	  System.out.println("Warning: Establishing fullscreen mode failed");
+
+	  gd.setDisplayMode(oldDisplayMode);
+	  gd.setFullScreenWindow(null);
+	} finally {
+
+	  inFullScreenToggle = false;
+	}
+    } else {
+	try {
+
+	  vncFrame.setVisible(false);
+
+	  gd.setFullScreenWindow(null);
+	  fullScreenMode = false;
+
+	  vncFrame.dispose();
+	  vncFrame.setUndecorated(false);
+
+	  vncFrame.pack();
+	  vncFrame.setResizable(true);
+	  vncFrame.setVisible(true);
+	  vncFrame.setTitle(rfb.desktopName);
+	  vc.resizeDesktopFrame();
+
+	  validate();
+
+	    // gd.setDisplayMode(newDisplayMode); // suggested by tutorial (?!)
+	} catch(Exception e) {
+	  System.out.println("Warning: Disabling fullscreen mode failed");
+
+	  gd.setDisplayMode(oldDisplayMode);
+	} finally {
+
+	  inFullScreenToggle = false;
+	}
+    }
+
+    moveFocusToDesktop();
+  }
+
   //
   // Stop the applet.
   // Main applet thread will terminate on first exception
@@ -983,6 +1120,9 @@ public class VncViewer extends java.applet.Applet
   //
 
   public void windowClosing(WindowEvent evt) {
+    if (inFullScreenToggle)
+	return;
+
     System.out.println("Closing window");
     if (rfb != null)
       disconnect();
@@ -998,7 +1138,22 @@ public class VncViewer extends java.applet.Applet
   // Ignore window events we're not interested in.
   //
 
-  public void windowActivated(WindowEvent evt) {}
+  public void windowActivated(WindowEvent evt) {
+    Transferable t;
+
+    try {
+      t = Toolkit.getDefaultToolkit().getSystemClipboard().getContents(null);
+      if (t != null && t.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+	String text = (String)t.getTransferData(DataFlavor.stringFlavor);
+
+	setCutText(text);
+      }
+     } catch (UnsupportedFlavorException e) {
+     } catch (IOException e) {
+     } catch (java.security.AccessControlException e) {
+     }
+  }
+
   public void windowDeactivated (WindowEvent evt) {}
   public void windowOpened(WindowEvent evt) {}
   public void windowClosed(WindowEvent evt) {}
